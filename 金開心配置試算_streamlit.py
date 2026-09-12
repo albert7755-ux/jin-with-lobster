@@ -73,6 +73,7 @@ def build_rows(picked, amounts):
         per_pay = annual / len(pm) if pm else 0
         rows.append({
             "標的": item["name"], "代碼": item.get("code", ""), "類型": item["_type"],
+            "產業": item.get("sector", "—"), "較美債bp": item.get("spread_bp"),
             "投資金額": amt, "當期收益率%": cy * 100, "配息頻率": item.get("freq", "月配"),
             "年化配息": annual, "每期配息": per_pay, "配息月份": pm,
             "到期日": item.get("maturity", "-"), "評等": item.get("ratings", ""),
@@ -125,8 +126,11 @@ total_capital = st.number_input("投資本金（總額）", min_value=0.0, value
 # 標的來源：報價檔債券 + 自行新增
 opts = {}
 for b in bonds:
+    _sec = b.get("sector") or ""
+    _sec_s = f'｜{_sec}' if _sec and _sec != "未分類" else ""
     label = (f'{b["name"]}（{b.get("code","")}）｜{b["ccy"]} {b.get("coupon","-")}%'
-             f'｜當期 {b["cy"]:.2f}%' if b.get("cy") else f'{b["name"]}（{b.get("code","")}）')
+             f'｜當期 {b["cy"]:.2f}%{_sec_s}' if b.get("cy")
+             else f'{b["name"]}（{b.get("code","")}）{_sec_s}')
     opts[label] = dict(b, _type="債券", _key=b.get("code") or b["name"])
 
 st.subheader("① 選擇標的")
@@ -183,7 +187,8 @@ if total_capital and abs(total_capital - total_amt) > 1:
                f"{total_capital - total_amt:,.0f}")
 
 df_detail = pd.DataFrame([{
-    "標的": r["標的"], "代碼": r["代碼"], "類型": r["類型"],
+    "標的": r["標的"], "代碼": r["代碼"], "類型": r["類型"], "產業": r.get("產業", "—"),
+    "較美債bp": r.get("較美債bp"),
     "投資金額": r["投資金額"], "配置比例%": r["投資金額"] / total_amt * 100,
     "當期收益率%": r["當期收益率%"], "配息頻率": r["配息頻率"],
     "年化配息": r["年化配息"], "每期配息": r["每期配息"],
@@ -212,6 +217,52 @@ c1.metric("配息最多的月份", f"{df_m['每月合計'].idxmax()}　{df_m['�
 c2.metric("配息最少的月份", f"{df_m['每月合計'].idxmin()}　{df_m['每月合計'].min():,.0f}")
 zero_m = [m for m in MONTHS if df_m.loc[m, "每月合計"] == 0]
 c3.metric("沒有配息的月份", f"{len(zero_m)} 個月" + (f"（{'、'.join(zero_m)}）" if zero_m else ""))
+
+# ---------- 產業分布（這包組合） ----------
+st.subheader("⑤ 產業分布")
+df_sec = (df_detail[df_detail["類型"] == "債券"]
+          .groupby("產業", as_index=False)
+          .agg(檔數=("標的", "count"), 投資金額=("投資金額", "sum"),
+               年化配息=("標的", lambda x: 0)))
+if not df_sec.empty:
+    # 重算年化配息(groupby lambda 無法直接取另一欄,改用 merge)
+    tmp = pd.DataFrame([{"產業": r.get("產業", "—"), "年化配息": r["年化配息"]}
+                        for r in rows if r["類型"] == "債券"])
+    df_sec = df_sec.drop(columns=["年化配息"]).merge(
+        tmp.groupby("產業", as_index=False).sum(), on="產業", how="left")
+    df_sec["配置比例%"] = df_sec["投資金額"] / df_sec["投資金額"].sum() * 100
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.dataframe(df_sec.sort_values("投資金額", ascending=False).style.format(
+            {"投資金額": "{:,.0f}", "年化配息": "{:,.0f}", "配置比例%": "{:.1f}"}),
+            use_container_width=True, hide_index=True)
+    with c2:
+        st.bar_chart(df_sec.set_index("產業")["投資金額"], height=260)
+    if len(df_sec) == 1:
+        st.info(f"債券部位全部集中在「{df_sec.iloc[0]['產業']}」，可考慮分散到其他產業。")
+else:
+    st.caption("目前組合沒有債券部位（或報價來源尚未建立產業分類）。")
+
+# ---------- 產業利差（市場面，全架上） ----------
+with st.expander("📊 全架上產業利差概況（點開看市場行情）"):
+    df_all = pd.DataFrame([b for b in bonds if b.get("sector") and b.get("ytm")])
+    if df_all.empty:
+        st.caption("尚無產業分類資料。請先在 LINE 打一次 /sector 建立分類快取。")
+    else:
+        df_all = df_all[(df_all["ytm"] > 0) & (df_all["ytm"] <= 25)]
+        ccy_pick = st.selectbox("幣別", sorted(df_all["ccy"].dropna().unique()),
+                                index=0, key="sec_ccy")
+        d = df_all[df_all["ccy"] == ccy_pick]
+        g = d.groupby("sector").agg(
+            檔數=("name", "count"), YTM中位=("ytm", "median"),
+            當期中位=("cy", "median"), 利差中位bp=("spread_bp", "median"),
+            平均年期=("years", "mean")).reset_index().rename(columns={"sector": "產業"})
+        g = g[g["檔數"] >= 3].sort_values("利差中位bp", na_position="last")
+        st.dataframe(g.style.format({"YTM中位": "{:.2f}", "當期中位": "{:.2f}",
+                                     "利差中位bp": "{:+.0f}", "平均年期": "{:.1f}"}),
+                     use_container_width=True, hide_index=True)
+        st.caption("利差＝每檔 YTM 減同剩餘年期的美債殖利率（曲線內插）後取中位數；"
+                   "各產業平均年期不同，比較僅供參考。")
 
 # ---------- 下載 ----------
 # 下載:優先輸出 Excel(兩個分頁);若環境未安裝 openpyxl 則自動退回 CSV
