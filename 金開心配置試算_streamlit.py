@@ -198,8 +198,14 @@ st.dataframe(df_detail.style.format({
 st.subheader("④ 每年配息時程表")
 df_m = monthly_table(rows)
 st.bar_chart(df_m["每月合計"], height=260)
-st.dataframe(df_m.style.format("{:,.0f}").background_gradient(
-    subset=["每月合計"], cmap="Blues"), use_container_width=True)
+# 不用 background_gradient(需 matplotlib),改用內建長條顯示每月合計的相對大小
+st.dataframe(
+    df_m.style.format("{:,.0f}"),
+    use_container_width=True,
+    column_config={"每月合計": st.column_config.ProgressColumn(
+        "每月合計", format="%.0f", min_value=0,
+        max_value=float(df_m["每月合計"].max() or 1))},
+)
 
 c1, c2, c3 = st.columns(3)
 c1.metric("配息最多的月份", f"{df_m['每月合計'].idxmax()}　{df_m['每月合計'].max():,.0f}")
