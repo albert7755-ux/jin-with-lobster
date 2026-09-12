@@ -214,13 +214,22 @@ zero_m = [m for m in MONTHS if df_m.loc[m, "每月合計"] == 0]
 c3.metric("沒有配息的月份", f"{len(zero_m)} 個月" + (f"（{'、'.join(zero_m)}）" if zero_m else ""))
 
 # ---------- 下載 ----------
-buf = io.BytesIO()
-with pd.ExcelWriter(buf, engine="openpyxl") as w:
-    df_detail.to_excel(w, sheet_name="配置明細", index=False)
-    df_m.to_excel(w, sheet_name="配息時程表")
-st.download_button("📥 下載試算結果 Excel", buf.getvalue(),
-                   file_name=f"金開心配置試算_{date.today():%Y%m%d}.xlsx",
-                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+# 下載:優先輸出 Excel(兩個分頁);若環境未安裝 openpyxl 則自動退回 CSV
+try:
+    import openpyxl  # noqa: F401
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df_detail.to_excel(w, sheet_name="配置明細", index=False)
+        df_m.to_excel(w, sheet_name="配息時程表")
+    st.download_button("📥 下載試算結果 Excel", buf.getvalue(),
+                       file_name=f"金開心配置試算_{date.today():%Y%m%d}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+except ModuleNotFoundError:
+    csv_txt = ("【配置明細】\n" + df_detail.to_csv(index=False)
+               + "\n【配息時程表】\n" + df_m.to_csv())
+    st.download_button("📥 下載試算結果 CSV", csv_txt.encode("utf-8-sig"),
+                       file_name=f"金開心配置試算_{date.today():%Y%m%d}.csv", mime="text/csv")
+    st.caption("（環境未安裝 openpyxl，改提供 CSV；在 requirements.txt 加入 openpyxl>=3.1 即可輸出 Excel）")
 
 st.caption(
     "配息月份係依配息頻率與到期月推算，少數債券實際付息日可能不同號，請以產品說明書為準。｜"
