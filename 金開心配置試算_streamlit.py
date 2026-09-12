@@ -231,23 +231,33 @@ if not df_sec.empty:
     df_sec = df_sec.drop(columns=["年化配息"]).merge(
         tmp.groupby("產業", as_index=False).sum(), on="產業", how="left")
     df_sec["配置比例%"] = df_sec["投資金額"] / df_sec["投資金額"].sum() * 100
-    c1, c2 = st.columns([1.1, 1])
-    with c1:
-        st.dataframe(df_sec.sort_values("投資金額", ascending=False).style.format(
-            {"投資金額": "{:,.0f}", "年化配息": "{:,.0f}", "配置比例%": "{:.1f}"}),
-            use_container_width=True, hide_index=True)
-    with c2:
-        st.bar_chart(df_sec.set_index("產業")["投資金額"], height=260)
-    if len(df_sec) == 1:
-        st.info(f"債券部位全部集中在「{df_sec.iloc[0]['產業']}」，可考慮分散到其他產業。")
+    known = df_sec[~df_sec["產業"].isin(["—", "未分類", ""])]
+    if known.empty:
+        st.caption("這包組合的債券尚未取得產業分類。"
+                   "請在 LINE 打一次 /sector 建立分類，並確認 Render 已部署最新版 main.py。")
+    else:
+        c1, c2 = st.columns([1.1, 1])
+        with c1:
+            st.dataframe(df_sec.sort_values("投資金額", ascending=False).style.format(
+                {"投資金額": "{:,.0f}", "年化配息": "{:,.0f}", "配置比例%": "{:.1f}"}),
+                use_container_width=True, hide_index=True)
+        with c2:
+            st.bar_chart(known.set_index("產業")["投資金額"], height=260)
+        if len(known) == 1:
+            st.info(f"債券部位全部集中在「{known.iloc[0]['產業']}」，可考慮分散到其他產業。")
 else:
     st.caption("目前組合沒有債券部位（或報價來源尚未建立產業分類）。")
 
 # ---------- 產業利差（市場面，全架上） ----------
 with st.expander("📊 全架上產業利差概況（點開看市場行情）"):
-    df_all = pd.DataFrame([b for b in bonds if b.get("sector") and b.get("ytm")])
+    df_all = pd.DataFrame([b for b in bonds
+                           if b.get("ytm") and b.get("sector") not in (None, "", "未分類")])
     if df_all.empty:
-        st.caption("尚無產業分類資料。請先在 LINE 打一次 /sector 建立分類快取。")
+        has_field = any("sector" in (b or {}) for b in bonds)
+        st.caption(
+            "尚無產業分類資料。請在 LINE 打一次 /sector 建立分類快取。"
+            if has_field else
+            "報價 API 尚未回傳產業欄位，請確認 Render 已部署最新版 main.py（需含 sector 欄位）。")
     else:
         df_all = df_all[(df_all["ytm"] > 0) & (df_all["ytm"] <= 25)]
         ccy_pick = st.selectbox("幣別", sorted(df_all["ccy"].dropna().unique()),
