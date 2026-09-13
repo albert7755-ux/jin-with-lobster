@@ -144,13 +144,27 @@ with st.expander("➕ 自行新增標的（基金、SI、定存等）"):
     n_freq = c3.selectbox("配息頻率", ["每月", "每季", "每半年", "每年"], key="mf")
     n_type = c4.selectbox("類型", ["基金", "SI", "其他"], key="mt")
     if st.button("加入") and n_name and n_cy > 0:
-        st.session_state.setdefault("manual", []).append(
-            {"name": n_name, "cy": n_cy, "freq": n_freq, "_type": n_type,
-             "_key": f"m_{n_name}", "code": "", "maturity": "-", "ratings": "", "tag": ""})
-        st.rerun()
+        _ms = st.session_state.setdefault("manual", [])
+        _key = f"m_{n_name}"
+        if any(x["_key"] == _key for x in _ms):
+            st.warning(f"「{n_name}」已在清單中，請改用不同名稱。")
+        else:
+            _ms.append({"name": n_name, "cy": n_cy, "freq": n_freq, "_type": n_type,
+                        "_key": _key, "code": "", "maturity": "-", "ratings": "",
+                        "tag": "", "sector": "—", "spread_bp": None})
+            st.rerun()
+    _ms = st.session_state.get("manual", [])
+    if _ms:
+        st.caption("已自行新增：")
+        for i_, m_ in enumerate(list(_ms)):
+            cA, cB = st.columns([5, 1])
+            cA.write(f"・{m_['name']}（{m_['_type']}　{m_['cy']:g}%　{m_['freq']}）")
+            if cB.button("移除", key=f"del_{m_['_key']}"):
+                _ms.pop(i_)
+                st.rerun()
 
-for m in st.session_state.get("manual", []):
-    picked.append(m)
+# 合併已選標的與手動新增標的,並以 _key 去重(避免 widget key 重複)
+picked = list({x["_key"]: x for x in (picked + st.session_state.get("manual", []))}.values())
 
 if not picked:
     st.info("請先選擇至少一個標的。")
@@ -164,7 +178,7 @@ for i, item in enumerate(picked):
     with cols[i % len(cols)]:
         amounts[item["_key"]] = st.number_input(
             item["name"][:18], min_value=0.0, value=0.0, step=10000.0, format="%.0f",
-            key=f"amt_{item['_key']}")
+            key=f"amt_{i}_{item['_key']}")
 
 rows = build_rows(picked, amounts)
 if not rows:
