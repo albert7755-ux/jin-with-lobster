@@ -25,7 +25,58 @@ import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="金開心配置試算", page_icon="💰", layout="wide")
+st.set_page_config(page_title="金開心配置試算", page_icon="💰", layout="wide",
+                   initial_sidebar_state="expanded")
+
+# ---------- 自訂樣式:富邦藍專業金融風,擺脫 Streamlit 預設外觀 ----------
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+html, body, [class*="css"] { font-family:'Noto Sans TC', 'Microsoft JhengHei', sans-serif; }
+.stApp { background:#eef2f7; }
+.block-container { padding-top:1.4rem; max-width:1400px; }
+#MainMenu, footer, header { visibility:hidden; }
+
+/* 頁首橫幅 */
+.hero { background:linear-gradient(115deg,#0B2A4A 0%,#1F8AC0 100%); color:#fff;
+        padding:22px 26px; border-radius:14px; margin-bottom:18px;
+        box-shadow:0 4px 18px rgba(11,42,74,.18); }
+.hero h1 { margin:0; font-size:25px; font-weight:700; letter-spacing:1px; }
+.hero p  { margin:6px 0 0; font-size:13px; opacity:.9; }
+
+/* 區塊標題 */
+h2, h3 { color:#0B2A4A !important; font-weight:700 !important;
+         border-left:5px solid #C9A227; padding-left:11px; margin-top:1.4rem !important; }
+
+/* 卡片容器 */
+div[data-testid="stVerticalBlockBorderWrapper"] { background:#fff; border-radius:12px; }
+
+/* 指標卡 */
+div[data-testid="stMetric"] { background:#fff; border:1px solid #e3e9f0; border-top:3px solid #1F8AC0;
+    border-radius:10px; padding:14px 16px; box-shadow:0 2px 8px rgba(0,0,0,.05); }
+div[data-testid="stMetricLabel"] p { font-size:13px !important; color:#5a6b7d !important; }
+div[data-testid="stMetricValue"] { font-size:26px !important; color:#0B2A4A !important; font-weight:700; }
+
+/* 輸入元件 */
+.stNumberInput input, .stTextInput input, .stSelectbox div[data-baseweb="select"] > div {
+    border-radius:8px !important; border-color:#ccd6e0 !important; }
+.stButton button { background:#1F8AC0; color:#fff; border:0; border-radius:8px;
+    padding:.45rem 1.3rem; font-weight:600; transition:.15s; }
+.stButton button:hover { background:#0B2A4A; transform:translateY(-1px); }
+.stDownloadButton button { background:#C9A227; color:#fff; border:0; border-radius:8px;
+    font-weight:600; padding:.5rem 1.4rem; }
+.stDownloadButton button:hover { background:#a8871f; }
+
+/* 表格 */
+div[data-testid="stDataFrame"] { border:1px solid #e3e9f0; border-radius:10px; overflow:hidden; }
+
+/* 側邊欄 */
+section[data-testid="stSidebar"] { background:#0B2A4A; }
+section[data-testid="stSidebar"] * { color:#dbe6f0 !important; }
+section[data-testid="stSidebar"] input { background:#163a5f !important; border-color:#2b5680 !important; }
+
+/* 展開區 */
+details { background:#fff !important; border:1px solid #e3e9f0 !important; border-radius:10px !important; }
+</style>""", unsafe_allow_html=True)
 
 MONTHS = ["一月", "二月", "三月", "四月", "五月", "六月",
           "七月", "八月", "九月", "十月", "十一月", "十二月"]
@@ -116,9 +167,10 @@ st.sidebar.markdown("---")
 st.sidebar.caption("基金／SI 等非報價檔商品，可在下方「自行新增標的」手動輸入配息率。")
 
 # ---------- 主畫面 ----------
-st.title("💰 金開心配置試算")
-st.caption("選標的、填金額，立刻看到每個月的現金流　"
-           + (f"｜報價檔更新：{updated}" if updated else ""))
+st.markdown(f"""<div class="hero">
+<h1>金開心配置試算</h1>
+<p>選標的、填金額，立刻看到客戶每個月的現金流
+{f"　·　報價檔更新：{updated}" if updated else ""}</p></div>""", unsafe_allow_html=True)
 
 total_capital = st.number_input("投資本金（總額）", min_value=0.0, value=0.0, step=100000.0,
                                 format="%.0f", help="僅供比對各標的金額加總是否相符")
@@ -287,6 +339,26 @@ with st.expander("📊 全架上產業利差概況（點開看市場行情）"):
                      use_container_width=True, hide_index=True)
         st.caption("利差＝每檔 YTM 減同剩餘年期的美債殖利率（曲線內插）後取中位數；"
                    "各產業平均年期不同，比較僅供參考。")
+
+# ---------- 匯出 ----------
+st.subheader("⑥ 匯出")
+cA, cB = st.columns(2)
+client_name = cA.text_input("客戶稱謂（選填，會印在PDF標題）", "")
+pdf_note = cB.text_input("備註（選填）", "")
+
+try:
+    from jkx_pdf import build_pdf
+    import tempfile as _tf
+    _p = _tf.NamedTemporaryFile(suffix=".pdf", delete=False)
+    build_pdf(_p.name, rows, df_m, total_amt, total_annual, blended,
+              client_name=client_name, note=pdf_note, today=date.today())
+    with open(_p.name, "rb") as f:
+        st.download_button("📄 下載試算報告 PDF", f.read(),
+                           file_name=f"金開心配置試算_{client_name or '試算'}_{date.today():%Y%m%d}.pdf",
+                           mime="application/pdf")
+    os.remove(_p.name)
+except Exception as e:
+    st.warning(f"PDF 產生失敗：{str(e)[:150]}")
 
 # ---------- 下載 ----------
 # 下載:優先輸出 Excel(兩個分頁);若環境未安裝 openpyxl 則自動退回 CSV
