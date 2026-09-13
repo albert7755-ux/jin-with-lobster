@@ -76,11 +76,25 @@ div[data-testid="stMetricValue"] { font-size:26px !important; color:#0B2A4A !imp
 /* 數字加減鈕 */
 .stNumberInput button { background:#f1f5f9 !important; border-left:1px solid #dbe4ec !important; }
 .stNumberInput button:hover { background:#e2ebf3 !important; }
-/* 多選(標的選擇)框 */
-.stMultiSelect div[data-baseweb="select"] > div {
-    border:1.6px solid #9db4c9 !important; border-radius:9px !important;
-    background:#fff !important; min-height:46px; }
-.stMultiSelect div[data-baseweb="select"] > div:hover { border-color:#1F8AC0 !important; }
+/* 多選(標的選擇)框:Streamlit 版本間結構不同,用多組選擇器確保命中 */
+div[data-testid="stMultiSelect"] div[data-baseweb="select"],
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"],
+.stMultiSelect div[data-baseweb="select"] > div,
+div[data-baseweb="select"] > div[class*="control"] {
+    border:1.8px solid #9db4c9 !important; border-radius:9px !important;
+    background:#fff !important; min-height:48px !important;
+    box-shadow:0 1px 3px rgba(11,42,74,.07) !important; }
+div[data-testid="stMultiSelect"] div[data-baseweb="select"]:hover,
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div:hover {
+    border-color:#1F8AC0 !important; }
+div[data-testid="stMultiSelect"] div[data-baseweb="select"]:focus-within {
+    border-color:#1F8AC0 !important; box-shadow:0 0 0 3px rgba(31,138,192,.16) !important; }
+/* 已選標籤 */
+div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+    background:#1F8AC0 !important; border-radius:6px !important; }
+/* placeholder 文字加深,不要看起來像停用 */
+div[data-baseweb="select"] div[class*="placeholder"] { color:#7d8fa1 !important; }
 .stButton button { background:#1F8AC0; color:#fff; border:0; border-radius:8px;
     padding:.45rem 1.3rem; font-weight:600; transition:.15s; }
 .stButton button:hover { background:#0B2A4A; transform:translateY(-1px); }
@@ -216,7 +230,9 @@ for b in bonds:
     opts[label] = dict(b, _type="債券", _key=b.get("code") or b["name"])
 
 st.subheader("① 選擇標的")
-picked_labels = st.multiselect("可搜尋名稱或代碼（最多 8 個）", list(opts.keys()), max_selections=8)
+picked_labels = st.multiselect(
+    "可搜尋名稱或代碼（最多 8 個）", list(opts.keys()), max_selections=8,
+    placeholder="👆 點這裡搜尋債券名稱或代碼，例如「蘋果」或「26070003」")
 picked = [opts[l] for l in picked_labels]
 
 with st.expander("➕ 自行新增標的（基金、SI、定存等）"):
