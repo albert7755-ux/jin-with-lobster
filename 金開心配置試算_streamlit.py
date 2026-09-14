@@ -447,41 +447,46 @@ _bond_rows = [r for r in rows if r["類型"] == "債券"
 if _bond_rows:
     st.subheader("⑥ 利率敏感度（估算，僅債券部位）")
     try:
-        from jkx_pdf import modified_duration
+        from jkx_pdf import modified_duration, price_change_pct
         _bamt = sum(r["投資金額"] for r in _bond_rows)
-        _wd, _dl = 0.0, []
+        _wd, _wc, _dl = 0.0, 0.0, []
         for r in _bond_rows:
-            _md, _ = modified_duration(r.get("票面") or r["當期收益率%"],
-                                       r["YTM"], r["剩餘年期"], r["配息頻率"])
+            _md, _cx = modified_duration(r.get("票面") or r["當期收益率%"],
+                                         r["YTM"], r["剩餘年期"], r["配息頻率"])
             if _md is None:
                 continue
             _w = r["投資金額"] / _bamt
             _wd += _w * _md
+            _wc += _w * (_cx or 0.0)
             _dl.append({"標的": r["標的"], "剩餘年期": r["剩餘年期"], "修正存續期間": _md,
-                        "投資金額": r["投資金額"], "債券部位占比%": _w * 100})
+                        "凸性": _cx, "投資金額": r["投資金額"], "債券部位占比%": _w * 100})
         if _dl and _wd > 0:
             k1, k2, k3 = st.columns(3)
             k1.metric("債券部位金額", f"{_bamt:,.0f}")
             k2.metric("加權平均存續期間", f"{_wd:.2f}")
-            k3.metric("利率+100bp 估計影響", f"{-_wd:.2f}%",
-                      delta=f"{-_bamt*_wd/100:,.0f}", delta_color="inverse")
+            _up100 = price_change_pct(_wd, _wc, 100)
+            k3.metric("利率+100bp 估計影響", f"{_up100:.2f}%",
+                      delta=f"{_bamt*_up100/100:,.0f}", delta_color="inverse")
             st.dataframe(pd.DataFrame(_dl).style.format(
-                {"剩餘年期": "{:.1f}", "修正存續期間": "{:.2f}",
+                {"剩餘年期": "{:.1f}", "修正存續期間": "{:.2f}", "凸性": "{:.1f}",
                  "投資金額": "{:,.0f}", "債券部位占比%": "{:.1f}"}),
                 use_container_width=True, hide_index=True)
             _sc = pd.DataFrame([{
                 "利率變動": f"{bp:+d} bp",
-                "估計價格變動%": -_wd * bp / 100,
-                "債券部位價值變動": _bamt * (-_wd * bp / 100) / 100,
-                "變動後債券部位": _bamt + _bamt * (-_wd * bp / 100) / 100,
+                "估計價格變動%": price_change_pct(_wd, _wc, bp),
+                "債券部位價值變動": _bamt * price_change_pct(_wd, _wc, bp) / 100,
+                "變動後債券部位": _bamt + _bamt * price_change_pct(_wd, _wc, bp) / 100,
             } for bp in (-100, -50, 50, 100)])
             st.dataframe(_sc.style.format(
                 {"估計價格變動%": "{:+.2f}", "債券部位價值變動": "{:+,.0f}",
                  "變動後債券部位": "{:,.0f}"}), use_container_width=True, hide_index=True)
             st.caption(
-                f"債券部位加權平均修正存續期間約 **{_wd:.2f}**，"
-                f"即利率每變動 100bp，債券部位價值約反向變動 {_wd:.2f}%。"
-                "本表為簡化估算：未計入凸性（convexity）、提前買回條款、信用利差變動與匯率影響；"
+                f"債券部位加權平均修正存續期間約 **{_wd:.2f}**、凸性約 **{_wc:.1f}**。"
+                f"已納入凸性調整，因此利率下跌 100bp 的估計漲幅"
+                f"（{price_change_pct(_wd,_wc,-100):+.2f}%）大於上漲 100bp 的估計跌幅"
+                f"（{price_change_pct(_wd,_wc,100):+.2f}%），此為債券價格與殖利率呈凸性關係之特性，"
+                "年期愈長、票面愈低者愈明顯。　"
+                "本表為簡化估算：未計入提前買回條款、信用利差變動、流動性與匯率影響；"
                 "實際價格以總行報價為準。基金與結構型商品未納入計算。")
     except Exception as e:
         st.caption(f"利率敏感度計算失敗：{str(e)[:120]}")
