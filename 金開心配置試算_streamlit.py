@@ -368,7 +368,15 @@ st.dataframe(df_detail.style.format({
 # ---------- 配息時程表 ----------
 st.subheader("④ 每年配息時程表")
 df_m = monthly_table(rows)
-st.bar_chart(df_m["每月合計"], height=260)
+# 長條圖:配息最多的月份標深藍,其餘天藍(與 PDF 一致)
+_mx_v = float(df_m["每月合計"].max() or 0)
+_chart_df = pd.DataFrame({
+    "月份": MONTHS,
+    "最高月份": [float(v) if v == _mx_v and v > 0 else 0.0 for v in df_m["每月合計"]],
+    "其他月份": [float(v) if v != _mx_v or v <= 0 else 0.0 for v in df_m["每月合計"]],
+})
+st.bar_chart(_chart_df.set_index("月份"), height=280, stack=True,
+             color=["#0B2A4A", "#1F8AC0"])
 # 不用 background_gradient(需 matplotlib),改用內建長條顯示每月合計的相對大小
 st.dataframe(
     df_m.style.format("{:,.0f}"),
