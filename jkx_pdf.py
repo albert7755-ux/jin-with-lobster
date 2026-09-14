@@ -304,7 +304,10 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                       + [f'{df_m.loc[m, "每月合計"]:,.0f}'])
     cw = [W * 0.10] + [(W * 0.72) / max(1, len(cols))] * len(cols) + [W * 0.18]
     tm = Table(rows_m, colWidths=cw, repeatRows=1)
-    mx_month = df_m["每月合計"].idxmax() if len(df_m) else None
+    # 標示所有「並列最高」的月份(idxmax 只會回傳第一個,會漏掉同額月份)
+    _mx_val = float(df_m["每月合計"].max()) if len(df_m) else 0.0
+    mx_months = [m for m in MONTHS
+                 if m in df_m.index and float(df_m.loc[m, "每月合計"]) == _mx_val and _mx_val > 0]
     style_m = [("FONTNAME", (0, 0), (-1, -1), FN), ("FONTSIZE", (0, 0), (-1, -1), 7.8),
                ("BACKGROUND", (0, 0), (-1, 0), NAVY), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D9D9")),
@@ -312,8 +315,8 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                ("BACKGROUND", (-1, 1), (-1, -1), LIGHT),
                ("TEXTCOLOR", (-1, 1), (-1, -1), NAVY)]
-    if mx_month in MONTHS:
-        r_ = MONTHS.index(mx_month) + 1
+    for _m in mx_months:
+        r_ = MONTHS.index(_m) + 1
         style_m.append(("BACKGROUND", (0, r_), (-1, r_), CREAM))
     tm.setStyle(TableStyle(style_m))
     # 標題與前幾列保持在一起(避免標題落單),表格本身可跨頁並自動重複表頭
