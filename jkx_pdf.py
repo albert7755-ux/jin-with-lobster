@@ -233,7 +233,7 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
     # 配置明細
     el.append(sec("配置明細"))
     head = [Paragraph(f"<b>{h}</b>", st_th) for h in
-            ["標的", "類型", "投資金額", "占比", "配息率", "YTM", "頻率",
+            ["標的", "類型", "投資金額", "占比", "票息率", "當期收益率", "YTM", "配息頻率",
              "年化配息", "到期日", "剩餘年期", "配息月份"]]
     data = [head]
     for r in rows:
@@ -242,17 +242,19 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
             _mat = str(_mat)[:10].replace("-", "/")
         _yr = r.get("剩餘年期")
         _ytm = r.get("YTM")
+        _cpn = r.get("票面")
         data.append([
             Paragraph(str(r["標的"])[:20], st_c), r["類型"],
             f'{r["投資金額"]:,.0f}', f'{r["投資金額"]/total_amt*100:.1f}%',
+            (f'{_cpn:g}%' if isinstance(_cpn, (int, float)) else "-"),
             f'{r["當期收益率%"]:.2f}%',
             (f'{_ytm:.2f}%' if isinstance(_ytm, (int, float)) else "-"),
             r["配息頻率"], f'{r["年化配息"]:,.0f}',
             _mat, (f'{_yr:.1f}年' if isinstance(_yr, (int, float)) else "-"),
             Paragraph(("每月" if len(r["配息月份"]) == 12
                        else "、".join(MONTHS[m - 1].replace("月", "") for m in r["配息月份"]) + "月"), st_c)])
-    tb = Table(data, colWidths=[W*0.17, W*0.06, W*0.11, W*0.055, W*0.07, W*0.07,
-                                W*0.07, W*0.10, W*0.09, W*0.07, W*0.12])
+    tb = Table(data, colWidths=[W*0.145, W*0.05, W*0.10, W*0.045, W*0.06, W*0.075,
+                                W*0.06, W*0.07, W*0.09, W*0.085, W*0.06, W*0.16])
     tb.setStyle(TableStyle([("FONTNAME", (0, 0), (-1, -1), FN), ("FONTSIZE", (0, 0), (-1, -1), 8),
                             ("BACKGROUND", (0, 0), (-1, 0), NAVY), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D9D9")),
