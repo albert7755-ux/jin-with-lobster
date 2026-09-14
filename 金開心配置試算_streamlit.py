@@ -231,7 +231,7 @@ for b in bonds:
 
 st.subheader("① 選擇標的")
 picked_labels = st.multiselect(
-    "可搜尋名稱或代碼（最多 8 個）", list(opts.keys()), max_selections=8,
+    "可搜尋名稱或代碼（最多 10 檔）", list(opts.keys()), max_selections=10,
     placeholder="👆 點這裡搜尋債券名稱或代碼，例如「蘋果」或「26070003」")
 picked = [opts[l] for l in picked_labels]
 
