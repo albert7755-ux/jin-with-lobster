@@ -158,9 +158,15 @@ def build_rows(picked, amounts):
         else:
             pm = list(range(1, 13))                       # 基金預設月配
         per_pay = annual / len(pm) if pm else 0
+        _yrs = item.get("years")
+        _mat_raw = item.get("maturity")
         rows.append({
             "標的": item["name"], "代碼": item.get("code", ""), "類型": item["_type"],
             "產業": item.get("sector", "—"), "較美債bp": item.get("spread_bp"),
+            "到期日": (_mat_raw if _mat_raw and _mat_raw != "-" else "-"),
+            "剩餘年期": (float(_yrs) if isinstance(_yrs, (int, float)) else None),
+            "YTM": (float(item["ytm"]) if isinstance(item.get("ytm"), (int, float)) else None),
+            "票面": (float(item["coupon"]) if isinstance(item.get("coupon"), (int, float)) else None),
             "投資金額": amt, "當期收益率%": cy * 100, "配息頻率": item.get("freq", "月配"),
             "年化配息": annual, "每期配息": per_pay, "配息月份": pm,
             "到期日": item.get("maturity", "-"), "評等": item.get("ratings", ""),
@@ -347,14 +353,17 @@ df_detail = pd.DataFrame([{
     "標的": r["標的"], "代碼": r["代碼"], "類型": r["類型"], "產業": r.get("產業", "—"),
     "較美債bp": r.get("較美債bp"),
     "投資金額": r["投資金額"], "配置比例%": r["投資金額"] / total_amt * 100,
-    "當期收益率%": r["當期收益率%"], "配息頻率": r["配息頻率"],
+    "當期收益率%": r["當期收益率%"], "YTM%": r.get("YTM"), "配息頻率": r["配息頻率"],
     "年化配息": r["年化配息"], "每期配息": r["每期配息"],
     "配息月份": "、".join(MONTHS[m - 1] for m in r["配息月份"]),
-    "到期日": r["到期日"], "評等": r["評等"], "資格": r["資格"],
+    "到期日": r.get("到期日", "-"), "剩餘年期": r.get("剩餘年期"),
+    "評等": r["評等"], "資格": r["資格"],
 } for r in rows])
 st.dataframe(df_detail.style.format({
     "投資金額": "{:,.0f}", "配置比例%": "{:.1f}", "當期收益率%": "{:.2f}",
-    "年化配息": "{:,.0f}", "每期配息": "{:,.0f}"}), use_container_width=True, hide_index=True)
+    "YTM%": "{:.2f}", "剩餘年期": "{:.1f}",
+    "年化配息": "{:,.0f}", "每期配息": "{:,.0f}"}, na_rep="-"),
+    use_container_width=True, hide_index=True)
 
 # ---------- 配息時程表 ----------
 st.subheader("④ 每年配息時程表")
@@ -431,8 +440,54 @@ with st.expander("📊 全架上產業利差概況（點開看市場行情）"):
         st.caption("利差＝每檔 YTM 減同剩餘年期的美債殖利率（曲線內插）後取中位數；"
                    "各產業平均年期不同，比較僅供參考。")
 
+# ---------- 利率敏感度 ----------
+_bond_rows = [r for r in rows if r["類型"] == "債券"
+              and isinstance(r.get("剩餘年期"), (int, float))
+              and isinstance(r.get("YTM"), (int, float))]
+if _bond_rows:
+    st.subheader("⑥ 利率敏感度（估算，僅債券部位）")
+    try:
+        from jkx_pdf import modified_duration
+        _bamt = sum(r["投資金額"] for r in _bond_rows)
+        _wd, _dl = 0.0, []
+        for r in _bond_rows:
+            _md, _ = modified_duration(r.get("票面") or r["當期收益率%"],
+                                       r["YTM"], r["剩餘年期"], r["配息頻率"])
+            if _md is None:
+                continue
+            _w = r["投資金額"] / _bamt
+            _wd += _w * _md
+            _dl.append({"標的": r["標的"], "剩餘年期": r["剩餘年期"], "修正存續期間": _md,
+                        "投資金額": r["投資金額"], "債券部位占比%": _w * 100})
+        if _dl and _wd > 0:
+            k1, k2, k3 = st.columns(3)
+            k1.metric("債券部位金額", f"{_bamt:,.0f}")
+            k2.metric("加權平均存續期間", f"{_wd:.2f}")
+            k3.metric("利率+100bp 估計影響", f"{-_wd:.2f}%",
+                      delta=f"{-_bamt*_wd/100:,.0f}", delta_color="inverse")
+            st.dataframe(pd.DataFrame(_dl).style.format(
+                {"剩餘年期": "{:.1f}", "修正存續期間": "{:.2f}",
+                 "投資金額": "{:,.0f}", "債券部位占比%": "{:.1f}"}),
+                use_container_width=True, hide_index=True)
+            _sc = pd.DataFrame([{
+                "利率變動": f"{bp:+d} bp",
+                "估計價格變動%": -_wd * bp / 100,
+                "債券部位價值變動": _bamt * (-_wd * bp / 100) / 100,
+                "變動後債券部位": _bamt + _bamt * (-_wd * bp / 100) / 100,
+            } for bp in (-100, -50, 50, 100)])
+            st.dataframe(_sc.style.format(
+                {"估計價格變動%": "{:+.2f}", "債券部位價值變動": "{:+,.0f}",
+                 "變動後債券部位": "{:,.0f}"}), use_container_width=True, hide_index=True)
+            st.caption(
+                f"債券部位加權平均修正存續期間約 **{_wd:.2f}**，"
+                f"即利率每變動 100bp，債券部位價值約反向變動 {_wd:.2f}%。"
+                "本表為簡化估算：未計入凸性（convexity）、提前買回條款、信用利差變動與匯率影響；"
+                "實際價格以總行報價為準。基金與結構型商品未納入計算。")
+    except Exception as e:
+        st.caption(f"利率敏感度計算失敗：{str(e)[:120]}")
+
 # ---------- 匯出 ----------
-st.subheader("⑥ 匯出報告")
+st.subheader("⑦ 匯出報告")
 cA, cB = st.columns(2)
 client_name = cA.text_input("客戶稱謂（選填，會印在PDF標題）", "")
 pdf_note = cB.text_input("備註（選填）", "")
