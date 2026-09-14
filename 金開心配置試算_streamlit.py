@@ -389,8 +389,11 @@ st.dataframe(
 )
 
 c1, c2, c3 = st.columns(3)
-c1.metric("配息最多的月份", f"{df_m['每月合計'].idxmax()}　{df_m['每月合計'].max():,.0f}")
-c2.metric("配息最少的月份", f"{df_m['每月合計'].idxmin()}　{df_m['每月合計'].min():,.0f}")
+_mxv, _mnv = float(df_m["每月合計"].max()), float(df_m["每月合計"].min())
+_mxm = "、".join(m for m in MONTHS if float(df_m.loc[m, "每月合計"]) == _mxv)
+_mnm = "、".join(m for m in MONTHS if float(df_m.loc[m, "每月合計"]) == _mnv)
+c1.metric("配息最多的月份", f"{_mxm}　{_mxv:,.0f}")
+c2.metric("配息最少的月份", f"{_mnm}　{_mnv:,.0f}")
 zero_m = [m for m in MONTHS if df_m.loc[m, "每月合計"] == 0]
 c3.metric("沒有配息的月份", f"{len(zero_m)} 個月" + (f"（{'、'.join(zero_m)}）" if zero_m else ""))
 
