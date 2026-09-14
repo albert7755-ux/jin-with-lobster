@@ -410,21 +410,32 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                                ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     el.append(_warn)
 
+    WATERMARK = "僅供內部教育訓練使用"
+
     def _footer(canv, doc_):
-        # ── 浮水印(斜向淺灰,置於內容下層) ──
+        # ── 浮水印:斜向平鋪小字(比照 /sheet 的樣式) ──
         canv.saveState()
-        canv.setFont(FN, 44)
-        canv.setFillColor(colors.Color(0.55, 0.6, 0.68, alpha=0.13))
-        canv.translate(A4[0] / 2, A4[1] / 2)
-        canv.rotate(38)
-        for _dy in (5.5 * cm, 0, -5.5 * cm):
-            canv.drawCentredString(0, _dy, "僅限內部教育訓練使用")
+        try:
+            canv.setFont(FN, 15)
+        except Exception:
+            canv.setFont("Helvetica", 15)
+        canv.setFillColor(colors.HexColor("#0B2A4A"))
+        try:
+            canv.setFillAlpha(0.06)
+        except Exception:
+            canv.setFillColor(colors.HexColor("#E4E9EF"))
+        _w, _h = A4
+        canv.translate(_w / 2, _h / 2)
+        canv.rotate(35)
+        for _row in range(-3, 4):
+            for _col in range(-1, 2):
+                canv.drawCentredString(_col * 330, _row * 150, WATERMARK)
         canv.restoreState()
         # ── 頁尾 ──
         canv.saveState(); canv.setFont(FN, 7.5)
         canv.setFillColor(colors.HexColor("#B23A2E"))
         canv.drawString(1.5 * cm, 0.85 * cm,
-                        "僅限內部教育訓練使用｜**本文件僅供內部試算使用 請勿外流**")
+                        "僅供內部教育訓練使用｜**本文件僅供內部試算使用 請勿外流**")
         canv.setFillColor(GRAY)
         canv.drawRightString(A4[0] - 1.5 * cm, 0.85 * cm,
                              f"金開心配置試算 · {today:%Y/%m/%d} · 第 {doc_.page} 頁")
