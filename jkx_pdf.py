@@ -24,26 +24,39 @@ def _cjk_font():
              "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.tff.ttf",
              "NotoSansTC.ttf", "NotoSansTC-Regular.otf",
              "NotoSansCJKtc-Regular.otf", "SourceHanSansTC-Regular.otf")
+    # 常見誤植副檔名也一併嘗試(.tff / .ttf. / 大小寫)
+    names = names + tuple(n.replace(".ttf", ".tff") for n in names if n.endswith(".ttf"))
     for n in names:
         cands += [os.path.join(base, "fonts", n), os.path.join(base, n),
                   os.path.join(os.getcwd(), "fonts", n), os.path.join(os.getcwd(), n)]
-    # 任何放在 fonts/ 或根目錄的字型檔都試
+    # 掃描 fonts/ 與根目錄下所有看起來像字型的檔案(含副檔名打錯的情況)
     for d in (os.path.join(base, "fonts"), base,
               os.path.join(os.getcwd(), "fonts"), os.getcwd()):
-        cands += sorted(glob.glob(os.path.join(d, "*.tt*")))
-        cands += sorted(glob.glob(os.path.join(d, "*.otf")))
+        for pat in ("*.tt*", "*.TT*", "*.otf", "*.OTF", "*.tff", "*.TFF",
+                    "*Noto*", "*noto*", "*msjh*", "*MSJH*"):
+            cands += sorted(glob.glob(os.path.join(d, pat)))
     cands += ["/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
               "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
               "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
               "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"]
+    seen = set()
     for c in cands:
         try:
-            if c and os.path.exists(c) and os.path.getsize(c) > 50 * 1024:
-                return c
+            if not c or c in seen or not os.path.isfile(c):
+                continue
+            seen.add(c)
+            if os.path.getsize(c) <= 50 * 1024:
+                continue
+            # 驗證檔案真的是可用字型(避免抓到非字型檔或損壞檔)
+            from matplotlib import font_manager as _fm
+            _fm.FontProperties(fname=c).get_name()
+            print(f"[JKX] 使用字型:{c}")
+            return c
         except Exception:
-            pass
-    print("[JKX] 警告:找不到中文字型,圖表中文將顯示為方框。"
-          "請將字型檔放在 repo 的 fonts/ 資料夾,例如 fonts/NotoSansTC-Regular.ttf")
+            continue
+    print("[JKX] 警告:找不到可用的中文字型,圖表中文將顯示為方框。"
+          "請將字型檔放到 repo 的 fonts/ 資料夾,且副檔名須為 .ttf/.ttc/.otf,"
+          "例如 fonts/NotoSansTC-Regular.ttf(注意是 ttf 不是 tff)")
     return None
 
 
@@ -143,7 +156,7 @@ def build_chart(df_m, out_png):
 
 
 def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
-              client_name="", note="", today=None):
+              note="", today=None, client_name=""):   # client_name 已停用,保留參數相容舊呼叫
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib import colors
@@ -191,10 +204,7 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                             topMargin=1.2 * cm, bottomMargin=1.2 * cm)
     el = []
     el.append(Paragraph("金開心配置試算", st_title))
-    sub = f"配息現金流規劃　{today:%Y/%m/%d}"
-    if client_name:
-        sub = f"{client_name}　|　" + sub
-    el.append(Paragraph(sub, st_sub))
+    el.append(Paragraph(f"配息現金流規劃　{today:%Y/%m/%d}　|　內部試算", st_sub))
     el.append(Spacer(1, 0.3 * cm))
 
     # 摘要
