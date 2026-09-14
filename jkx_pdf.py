@@ -251,18 +251,37 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFBFC")])]))
     el.append(tb)
 
-    # 圖表
-    png = None
+    # 圖表:以 reportlab 原生繪製(與表格共用字型引擎,中文不受外部字型檔影響)
     try:
-        f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        png = build_chart(df_m, f.name)
-        if png:
-            from PIL import Image as _P
-            iw, ih = _P.open(png).size
-            el.append(Spacer(1, 0.25 * cm))
-            el.append(RLImage(png, width=W, height=W * ih / iw))
+        from reportlab.graphics.shapes import Drawing, Rect, String, Line
+        _vals = [float(df_m.loc[m, "每月合計"]) for m in MONTHS]
+        _mx = max(_vals) if _vals else 0
+        _cw, _ch = W, 4.6 * cm
+        _pad_l, _pad_b, _pad_t = 0.2 * cm, 0.85 * cm, 0.75 * cm
+        _plot_h = _ch - _pad_b - _pad_t
+        _slot = (_cw - _pad_l) / 12.0
+        _bw = _slot * 0.58
+        d = Drawing(_cw, _ch)
+        d.add(Line(_pad_l, _pad_b, _cw, _pad_b, strokeColor=colors.HexColor("#ccd6e0"),
+                   strokeWidth=0.8))
+        d.add(String(_cw / 2, _ch - 0.42 * cm, "每年配息時程（各月合計）",
+                     fontName=FN, fontSize=10.5, fillColor=NAVY, textAnchor="middle"))
+        for _i, (_m, _v) in enumerate(zip(MONTHS, _vals)):
+            _x = _pad_l + _i * _slot + (_slot - _bw) / 2
+            _h = (_v / _mx * _plot_h) if _mx else 0
+            if _h > 0:
+                d.add(Rect(_x, _pad_b, _bw, _h, fillColor=(NAVY if _v == _mx else BLUE),
+                           strokeColor=None))
+                d.add(String(_x + _bw / 2, _pad_b + _h + 2.5, f"{_v:,.0f}",
+                             fontName=FN, fontSize=6.6, fillColor=NAVY, textAnchor="middle"))
+            d.add(String(_x + _bw / 2, _pad_b - 0.42 * cm, _m.replace("月", ""),
+                         fontName=FN, fontSize=7.6, fillColor=colors.HexColor("#555555"),
+                         textAnchor="middle"))
+        el.append(Spacer(1, 0.25 * cm))
+        el.append(d)
     except Exception as e:
-        print(f"[JKX] chart embed: {e}")
+        print(f"[JKX] 原生圖表失敗: {e}")
+    png = None
 
     # 時程表
     cols = [c for c in df_m.columns if c != "每月合計"]
