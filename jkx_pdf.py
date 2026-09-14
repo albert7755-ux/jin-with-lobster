@@ -66,9 +66,9 @@ FREQ_N = {"每月": 12, "每季": 4, "每半年": 2, "每年": 1,
 
 def modified_duration(coupon_pct, ytm_pct, years, freq_label):
     """
-    以現金流折現法計算修正存續期間(Modified Duration)。
+    以現金流折現法計算修正存續期間(Modified Duration)與凸性(Convexity)。
     coupon_pct/ytm_pct 為年化百分比,years 為剩餘年期。
-    回傳 (修正存續期間, 每 100bp 之估計價格變動%) ;資料不足回 (None, None)
+    回傳 (修正存續期間, 凸性) ;資料不足回 (None, None)
     """
     try:
         m = FREQ_N.get(str(freq_label).strip(), 2)
@@ -79,20 +79,30 @@ def modified_duration(coupon_pct, ytm_pct, years, freq_label):
             return None, None
         cpn = 100.0 * c / m
         yq = y / m
-        pv_sum, wt_sum = 0.0, 0.0
+        pv_sum, wt_sum, cx_sum = 0.0, 0.0, 0.0
         for t in range(1, n + 1):
             cf = cpn + (100.0 if t == n else 0.0)
-            df = (1 + yq) ** t
-            pv = cf / df
+            pv = cf / ((1 + yq) ** t)
             pv_sum += pv
             wt_sum += (t / m) * pv
+            # 凸性分子:t(t+1)*CF/(1+y/m)^(t+2)
+            cx_sum += t * (t + 1) * cf / ((1 + yq) ** (t + 2))
         if pv_sum <= 0:
             return None, None
-        macaulay = wt_sum / pv_sum
-        mod = macaulay / (1 + yq)
-        return mod, -mod * 1.0          # +100bp 時的估計價格變動%
+        mod = (wt_sum / pv_sum) / (1 + yq)
+        convexity = cx_sum / (pv_sum * (m ** 2))
+        return mod, convexity
     except Exception:
         return None, None
+
+
+def price_change_pct(mod_dur, convexity, bp):
+    """
+    估計價格變動% = -D×Δy + ½×C×Δy²
+    第二項(凸性)使利率下跌時漲幅大於上漲時的跌幅。
+    """
+    dy = bp / 10000.0
+    return (-mod_dur * dy + 0.5 * (convexity or 0.0) * dy * dy) * 100.0
 
 
 def build_chart(df_m, out_png):
@@ -315,23 +325,25 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
               and isinstance(r.get("YTM"), (int, float))]
     if _bonds:
         _bond_amt = sum(r["投資金額"] for r in _bonds)
-        _wd, _rows_d = 0.0, []
+        _wd, _wc, _rows_d = 0.0, 0.0, []
         for r in _bonds:
-            _md, _ = modified_duration(r["當期收益率%"] * 0 + r.get("票面", r["當期收益率%"]),
-                                       r["YTM"], r["剩餘年期"], r["配息頻率"])
+            _md, _cx = modified_duration(r.get("票面") or r["當期收益率%"],
+                                         r["YTM"], r["剩餘年期"], r["配息頻率"])
             if _md is None:
                 continue
             _w = r["投資金額"] / _bond_amt
             _wd += _w * _md
-            _rows_d.append([Paragraph(str(r["標的"])[:24], st_c),
+            _wc += _w * (_cx or 0.0)
+            _rows_d.append([Paragraph(str(r["標的"])[:22], st_c),
                             f'{r["剩餘年期"]:.1f}年', f'{_md:.2f}',
+                            f'{(_cx or 0):.1f}',
                             f'{r["投資金額"]:,.0f}', f'{_w*100:.1f}%'])
         if _rows_d and _wd > 0:
             el.append(CondPageBreak(6 * cm))
             el.append(sec("利率敏感度（估算，僅債券部位）"))
             _t1 = Table([[Paragraph(f"<b>{h}</b>", st_th) for h in
-                          ["標的", "剩餘年期", "修正存續期間", "投資金額", "債券部位占比"]]] + _rows_d,
-                        colWidths=[W*0.36, W*0.14, W*0.18, W*0.18, W*0.14])
+                          ["標的", "剩餘年期", "修正存續期間", "凸性", "投資金額", "債券部位占比"]]] + _rows_d,
+                        colWidths=[W*0.30, W*0.12, W*0.16, W*0.10, W*0.18, W*0.14])
             _t1.setStyle(TableStyle([("FONTNAME", (0,0), (-1,-1), FN), ("FONTSIZE", (0,0), (-1,-1), 8),
                                      ("BACKGROUND", (0,0), (-1,0), NAVY), ("TEXTCOLOR", (0,0), (-1,0), colors.white),
                                      ("GRID", (0,0), (-1,-1), 0.4, colors.HexColor("#D9D9D9")),
@@ -343,7 +355,7 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
             _sc = [[Paragraph(f"<b>{h}</b>", st_th) for h in
                     ["利率變動", "估計價格變動", "債券部位價值變動", "變動後債券部位"]]]
             for _bp in (-100, -50, 50, 100):
-                _chg = -_wd * (_bp / 100.0)
+                _chg = price_change_pct(_wd, _wc, _bp)
                 _amt = _bond_amt * _chg / 100.0
                 _sc.append([f"{_bp:+d} bp", f"{_chg:+.2f}%", f"{_amt:+,.0f}",
                             f"{_bond_amt + _amt:,.0f}"])
@@ -357,12 +369,16 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
                                      ("TEXTCOLOR", (2,3), (2,4), colors.HexColor("#B23A2E"))]))
             el.append(_t2)
             el.append(Spacer(1, 0.1 * cm))
+            _up = price_change_pct(_wd, _wc, 100)
+            _dn = price_change_pct(_wd, _wc, -100)
             el.append(Paragraph(
-                f"債券部位加權平均修正存續期間約 <b>{_wd:.2f}</b>，"
-                f"即利率每變動 100bp，債券部位價值約反向變動 {_wd:.2f}%。"
-                "本表為簡化估算：以現金流折現法計算，未計入凸性(convexity)、提前買回條款、"
-                "信用利差變動與匯率影響；實際價格以總行報價為準。"
-                "基金與結構型商品未納入計算。", st_small))
+                f"債券部位加權平均修正存續期間約 <b>{_wd:.2f}</b>、凸性約 <b>{_wc:.1f}</b>。"
+                f"已納入凸性調整，因此利率下跌 100bp 的估計漲幅（{_dn:+.2f}%）"
+                f"大於上漲 100bp 的估計跌幅（{_up:+.2f}%），"
+                "此為債券價格與殖利率呈凸性關係之特性，年期愈長、票面愈低者愈明顯。", st_small))
+            el.append(Paragraph(
+                "本表為簡化估算：以現金流折現法計算，未計入提前買回條款、信用利差變動、"
+                "流動性與匯率影響；實際價格以總行報價為準。基金與結構型商品未納入計算。", st_small))
 
     if note:
         el.append(Spacer(1, 0.2 * cm))
@@ -395,9 +411,20 @@ def build_pdf(out_path, rows, df_m, total_amt, total_annual, blended,
     el.append(_warn)
 
     def _footer(canv, doc_):
+        # ── 浮水印(斜向淺灰,置於內容下層) ──
+        canv.saveState()
+        canv.setFont(FN, 44)
+        canv.setFillColor(colors.Color(0.55, 0.6, 0.68, alpha=0.13))
+        canv.translate(A4[0] / 2, A4[1] / 2)
+        canv.rotate(38)
+        for _dy in (5.5 * cm, 0, -5.5 * cm):
+            canv.drawCentredString(0, _dy, "僅限內部教育訓練使用")
+        canv.restoreState()
+        # ── 頁尾 ──
         canv.saveState(); canv.setFont(FN, 7.5)
         canv.setFillColor(colors.HexColor("#B23A2E"))
-        canv.drawString(1.5 * cm, 0.85 * cm, "**本文件僅供內部試算使用 請勿外流**")
+        canv.drawString(1.5 * cm, 0.85 * cm,
+                        "僅限內部教育訓練使用｜**本文件僅供內部試算使用 請勿外流**")
         canv.setFillColor(GRAY)
         canv.drawRightString(A4[0] - 1.5 * cm, 0.85 * cm,
                              f"金開心配置試算 · {today:%Y/%m/%d} · 第 {doc_.page} 頁")
