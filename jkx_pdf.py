@@ -19,8 +19,11 @@ def _cjk_font():
     """
     base = os.path.dirname(os.path.abspath(__file__))
     cands = [os.getenv("BOND_SHEET_FONT", "")]
-    names = ("NotoSansTC-Regular.ttf", "NotoSansTC-Regular.tff.ttf",
-             "NotoSansTC.ttf", "NotoSansTC-Regular.otf", "msjh.ttf", "msjh.ttc")
+    # 優先序:微軟正黑體(若自行放入) > Noto Sans TC > 其他
+    names = ("msjh.ttc", "msjh.ttf", "msjhbd.ttc", "MSJH.TTC",
+             "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.tff.ttf",
+             "NotoSansTC.ttf", "NotoSansTC-Regular.otf",
+             "NotoSansCJKtc-Regular.otf", "SourceHanSansTC-Regular.otf")
     for n in names:
         cands += [os.path.join(base, "fonts", n), os.path.join(base, n),
                   os.path.join(os.getcwd(), "fonts", n), os.path.join(os.getcwd(), n)]
@@ -89,19 +92,25 @@ def build_chart(df_m, out_png):
         fp = _cjk_font()
         PROP = None
         if fp:
+            # 先建立 FontProperties(這一步最關鍵,直接綁檔案,不依賴字型名稱解析)
             try:
-                font_manager.fontManager.addfont(fp)          # 先註冊
-                PROP = font_manager.FontProperties(fname=fp)  # 再取 FontProperties
-                _fam = PROP.get_name()
-                matplotlib.rcParams["font.family"] = "sans-serif"
-                matplotlib.rcParams["font.sans-serif"] = [_fam] + \
-                    matplotlib.rcParams.get("font.sans-serif", [])
-                print(f"[JKX] chart font: {fp} -> {_fam}")
+                PROP = font_manager.FontProperties(fname=fp)
+                print(f"[JKX] chart font 已綁定檔案: {fp}")
             except Exception as e:
-                print(f"[JKX] font register fail: {e}")
-                PROP = None
+                print(f"[JKX] FontProperties 建立失敗: {e}")
+            # 再嘗試註冊到字型管理員(失敗不影響 PROP)
+            try:
+                font_manager.fontManager.addfont(fp)
+                if PROP is not None:
+                    _fam = PROP.get_name()
+                    matplotlib.rcParams["font.family"] = "sans-serif"
+                    matplotlib.rcParams["font.sans-serif"] = \
+                        [_fam] + list(matplotlib.rcParams.get("font.sans-serif", []))
+                    print(f"[JKX] chart font 已註冊: {_fam}")
+            except Exception as e:
+                print(f"[JKX] addfont 略過(不影響繪圖): {e}")
         else:
-            print("[JKX] 找不到中文字型,圖表中文可能顯示為方框")
+            print("[JKX] 找不到中文字型,圖表中文將顯示為方框")
         matplotlib.rcParams["axes.unicode_minus"] = False
         vals = list(df_m["每月合計"])
         labels = [m.replace("月", "") for m in MONTHS]   # 一、二…十二,縮短避免重疊
@@ -118,7 +127,9 @@ def build_chart(df_m, out_png):
         ax.spines[["top", "right"]].set_visible(False)
         ax.tick_params(axis="y", labelsize=8)
         for lb in ax.get_xticklabels():
-            lb.set_fontproperties(PROP); lb.set_fontsize(9)
+            if PROP is not None:
+                lb.set_fontproperties(PROP)
+            lb.set_fontsize(9)
         ax.set_title("每年配息時程（各月合計）", fontproperties=PROP, fontsize=11.5,
                      color="#0B2A4A", pad=10)
         ax.set_xlabel("月", fontproperties=PROP, fontsize=9, labelpad=2)
