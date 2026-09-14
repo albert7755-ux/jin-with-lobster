@@ -240,7 +240,9 @@ with st.expander("➕ 自行新增標的（基金、SI、定存等）"):
     n_name = c1.text_input("名稱", key="mn")
     n_cy = c2.number_input("配息率 %", min_value=0.0, max_value=30.0, value=0.0, step=0.1, key="mc")
     n_freq = c3.selectbox("配息頻率", ["每月", "每季", "每半年", "每年"], key="mf")
-    n_type = c4.selectbox("類型", ["基金", "SI", "其他"], key="mt")
+    n_type = c4.selectbox("類型", ["基金", "SN", "ELN", "SI", "定存", "其他"], key="mt")
+    if n_cy > 20:
+        st.warning("配息率超過 20%，請確認是否為年化配息率（非單期配息率）。")
     if st.button("加入") and n_name and n_cy > 0:
         _ms = st.session_state.setdefault("manual", [])
         _key = f"m_{n_name}"
@@ -274,14 +276,57 @@ amounts = {}
 cols = st.columns(min(4, len(picked)))
 for i, item in enumerate(picked):
     with cols[i % len(cols)]:
+        _min = float(item.get("min_amt") or 0)
+        _hint = f"最低申購 {_min:,.0f}" if _min else "手動標的，無最低限制"
         amounts[item["_key"]] = st.number_input(
-            item["name"][:18], min_value=0.0, value=0.0, step=10000.0, format="%.0f",
-            key=f"amt_{i}_{item['_key']}")
+            item["name"][:18], min_value=0.0, value=0.0,
+            step=(_min if _min else 10000.0), format="%.0f",
+            help=_hint, key=f"amt_{i}_{item['_key']}")
+        st.caption(f"　{_hint}"
+                   + (f"｜{item.get('tag')}" if item.get("tag") else "")
+                   + (f"｜額度:{item.get('avail')}" if str(item.get("avail", "")) not in ("有", "") else ""))
+
+# ---- 防呆檢查 ----
+_warns, _errs = [], []
+for item in picked:
+    _amt = float(amounts.get(item["_key"], 0) or 0)
+    if _amt <= 0:
+        continue
+    _min = item.get("min_amt")
+    if _min and _amt < float(_min):
+        _errs.append(f"**{item['name']}** 投入 {_amt:,.0f}，低於最低申購面額 {float(_min):,.0f}")
+    if _min and float(_min) > 0 and _amt % float(_min) != 0:
+        _warns.append(f"**{item['name']}** 金額非最低申購面額（{float(_min):,.0f}）的整數倍，"
+                      "實際可承作金額請以總行系統為準")
+    if item.get("avail") and str(item["avail"]) not in ("有", ""):
+        _warns.append(f"**{item['name']}** 本日額度為「{item['avail']}」，請先確認是否可申購")
+    if "專投" in str(item.get("tag", "")):
+        _warns.append(f"**{item['name']}** 限專業投資人申購")
+    if "高資產" in str(item.get("tag", "")):
+        _warns.append(f"**{item['name']}** 限高資產客戶申購")
+
+_typed_total = sum(float(amounts.get(k["_key"], 0) or 0) for k in picked)
+if total_capital and _typed_total > total_capital:
+    _errs.append(f"各標的加總 {_typed_total:,.0f} 已**超過**投資本金 {total_capital:,.0f}，"
+                 f"超出 {_typed_total - total_capital:,.0f}")
+
+for _e in _errs:
+    st.error("⚠️ " + _e)
+for _w in dict.fromkeys(_warns):
+    st.warning("ℹ️ " + _w)
 
 rows = build_rows(picked, amounts)
 if not rows:
     st.warning("請至少輸入一個標的的投資金額。")
     st.stop()
+
+if total_capital:
+    _left = total_capital - _typed_total
+    _c1, _c2, _c3 = st.columns(3)
+    _c1.metric("投資本金", f"{total_capital:,.0f}")
+    _c2.metric("已配置", f"{_typed_total:,.0f}")
+    _c3.metric("尚未配置", f"{_left:,.0f}", delta=None,
+               delta_color="off" if abs(_left) < 1 else "normal")
 
 total_amt = sum(r["投資金額"] for r in rows)
 total_annual = sum(r["年化配息"] for r in rows)
@@ -387,7 +432,7 @@ with st.expander("📊 全架上產業利差概況（點開看市場行情）"):
                    "各產業平均年期不同，比較僅供參考。")
 
 # ---------- 匯出 ----------
-st.subheader("⑥ 匯出")
+st.subheader("⑥ 匯出報告")
 cA, cB = st.columns(2)
 client_name = cA.text_input("客戶稱謂（選填，會印在PDF標題）", "")
 pdf_note = cB.text_input("備註（選填）", "")
@@ -401,10 +446,14 @@ try:
     with open(_p.name, "rb") as f:
         st.download_button("📄 下載試算報告 PDF", f.read(),
                            file_name=f"金開心配置試算_{client_name or '試算'}_{date.today():%Y%m%d}.pdf",
-                           mime="application/pdf")
+                           mime="application/pdf", use_container_width=True)
     os.remove(_p.name)
+except ModuleNotFoundError as e:
+    st.error(f"PDF 需要的套件尚未安裝：{e.name}。"
+             f"請確認 repo 根目錄的 **requirements.txt**（不是其他檔名）內含 "
+             f"`reportlab`、`matplotlib`、`pillow`，存檔後 Reboot app。")
 except Exception as e:
-    st.warning(f"PDF 產生失敗：{str(e)[:150]}")
+    st.warning(f"PDF 產生失敗：{str(e)[:200]}")
 
 # ---------- 下載 ----------
 # 下載:優先輸出 Excel(兩個分頁);若環境未安裝 openpyxl 則自動退回 CSV
