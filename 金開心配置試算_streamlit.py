@@ -370,18 +370,40 @@ st.dataframe(df_detail.style.format({
 # ---------- 配息時程表 ----------
 st.subheader("④ 每年配息時程表")
 df_m = monthly_table(rows)
-# 長條圖:配息最多的月份標深藍,其餘天藍(與 PDF 一致)
+# 長條圖:用 Altair 固定月份順序(st.bar_chart 會自動排序導致月份錯亂),
+# 並將配息最高的月份標深藍,與 PDF 一致
 _mx_v = float(df_m["每月合計"].max() or 0)
 _chart_df = pd.DataFrame({
     "月份": MONTHS,
-    "最高月份": [float(v) if v == _mx_v and v > 0 else 0.0 for v in df_m["每月合計"]],
-    "其他月份": [float(v) if v != _mx_v or v <= 0 else 0.0 for v in df_m["每月合計"]],
+    "金額": [float(df_m.loc[m, "每月合計"]) for m in MONTHS],
 })
-st.bar_chart(_chart_df.set_index("月份"), height=280, stack=True,
-             color=["#0B2A4A", "#1F8AC0"])
+try:
+    import altair as alt
+    _bars = alt.Chart(_chart_df).mark_bar(size=34, cornerRadiusTopLeft=3,
+                                          cornerRadiusTopRight=3).encode(
+        x=alt.X("月份:N", sort=MONTHS, title=None,
+                axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+        y=alt.Y("金額:Q", title=None, axis=alt.Axis(format=",.0f", labelFontSize=11)),
+        color=alt.condition(alt.datum.金額 >= _mx_v,
+                            alt.value("#0B2A4A"), alt.value("#1F8AC0")),
+        tooltip=[alt.Tooltip("月份:N"), alt.Tooltip("金額:Q", format=",.0f")],
+    )
+    _labels = alt.Chart(_chart_df).mark_text(dy=-7, fontSize=10,
+                                             color="#0B2A4A").encode(
+        x=alt.X("月份:N", sort=MONTHS),
+        y=alt.Y("金額:Q"),
+        text=alt.condition(alt.datum.金額 > 0,
+                           alt.Text("金額:Q", format=",.0f"), alt.value("")),
+    )
+    st.altair_chart((_bars + _labels).properties(height=290),
+                    use_container_width=True)
+except Exception as _e:
+    st.bar_chart(_chart_df.set_index("月份")["金額"], height=280)
 # 不用 background_gradient(需 matplotlib),改用內建長條顯示每月合計的相對大小
+_df_show = df_m.copy()
 st.dataframe(
-    df_m.style.format("{:,.0f}"),
+    _df_show.style.format(lambda v: "-" if (isinstance(v, (int, float)) and v == 0)
+                          else f"{v:,.0f}"),
     use_container_width=True,
     column_config={"每月合計": st.column_config.ProgressColumn(
         "每月合計", format="%.0f", min_value=0,
