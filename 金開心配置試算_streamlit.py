@@ -488,19 +488,19 @@ if _bond_rows:
 
 # ---------- 匯出 ----------
 st.subheader("⑦ 匯出報告")
-cA, cB = st.columns(2)
-client_name = cA.text_input("客戶稱謂（選填，會印在PDF標題）", "")
-pdf_note = cB.text_input("備註（選填）", "")
+pdf_note = st.text_input("備註（選填，會印在報告上）", "",
+                         placeholder="例如：配息月份較集中於三、九月，其餘月份可搭配月配息商品")
+st.caption("本報告不填寫客戶姓名，僅作為內部試算與討論之用。")
 
 try:
     from jkx_pdf import build_pdf
     import tempfile as _tf
     _p = _tf.NamedTemporaryFile(suffix=".pdf", delete=False)
     build_pdf(_p.name, rows, df_m, total_amt, total_annual, blended,
-              client_name=client_name, note=pdf_note, today=date.today())
+              note=pdf_note, today=date.today())
     with open(_p.name, "rb") as f:
         st.download_button("📄 下載試算報告 PDF", f.read(),
-                           file_name=f"金開心配置試算_{client_name or '試算'}_{date.today():%Y%m%d}.pdf",
+                           file_name=f"金開心配置試算_{date.today():%Y%m%d}.pdf",
                            mime="application/pdf", use_container_width=True)
     os.remove(_p.name)
 except ModuleNotFoundError as e:
