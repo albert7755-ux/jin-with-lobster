@@ -387,6 +387,7 @@ def _swap_stats(rows_, md_fn):
     tot = sum(r["金額"] for r in rows_)
     wd = wc = wy = 0.0
     cost_amt = cost_w_ytm = unreal = 0.0
+    px_mv = px_cost = 0.0   # 有填買入價格的部位：目前市值、當初投入本金
     det = []
     for r in rows_:
         md, cx = md_fn(r["票面%"], r["YTM%"], r["剩餘年期"], r["配息頻率"])
@@ -404,6 +405,8 @@ def _swap_stats(rows_, md_fn):
                 # 市值 = 面額 × 現價/100 → 損益 = 市值 × (現價 − 買入價) / 現價
                 pnl = r["金額"] * (now_px - r["買入價格"]) / now_px
                 unreal += pnl
+                px_mv += r["金額"]
+                px_cost += r["金額"] - pnl
             if r.get("買入日期"):
                 buy_yrs = r["剩餘年期"] + (date.today() - r["買入日期"]).days / 365.25
                 buy_ytm = _ytm_from_price(r["買入價格"], r["票面%"], buy_yrs, r["配息頻率"])
@@ -416,6 +419,8 @@ def _swap_stats(rows_, md_fn):
             "cost_ytm": (cost_w_ytm / cost_amt) if cost_amt else None,
             "cost_cover": (cost_amt / tot * 100) if tot else 0.0,
             "unreal": unreal,
+            "mv_to_cost": (px_mv / px_cost) if px_cost > 0 else None,
+            "px_cost": px_cost,
             "has_price": any(d["未實現損益"] is not None for d in det)}
 
 
@@ -479,18 +484,26 @@ if app_mode == "🔄 換券前後比較":
         st.markdown("**📌 調整前的買入成本（依您填的買入價格反推）**")
         c1, c2, c3 = st.columns(3)
         if sb["cost_ytm"] is not None:
-            c1.metric("調整前・買入時 YTM（加權）", f"{sb['cost_ytm']:.2f}%",
-                      delta=f"換入後 {sa['ytm']:.2f}%，差 {(sa['ytm'] - sb['cost_ytm']) * 100:+.0f} bp",
-                      delta_color="normal")
+            c1.metric("調整前・當年買入時 YTM", f"{sb['cost_ytm']:.2f}%")
+            c1.caption("當年鎖定的收益率（持有到期才會實現）")
         else:
-            c1.metric("調整前・買入時 YTM（加權）", "—")
+            c1.metric("調整前・當年買入時 YTM", "—")
             c1.caption("請同時填「買入價格」與「買入日期」")
-        c2.metric("有填買入資料的部位占比", f"{sb['cost_cover']:.0f}%")
-        if sb["has_price"]:
+        if sb["mv_to_cost"]:
+            _k = sb["mv_to_cost"]
+            _hold_oc = sb["ytm"] * _k      # 續抱：每年預期報酬 ÷ 當初投入本金
+            _swap_oc = sa["ytm"] * _k      # 換券：賣出所得全部換入新券
+            c2.metric("以當初投入本金計算的年收益率", f"{_hold_oc:.2f}% → {_swap_oc:.2f}%",
+                      delta=f"{(_swap_oc - _hold_oc) * 100:+.0f} bp（續抱 → 換券）",
+                      delta_color="normal")
+            c2.caption(f"當初投入約 {sb['px_cost']:,.0f}，假設賣出所得全數換入新券")
             c3.metric("換券將實現的損益（估）", f"{sb['unreal']:+,.0f}")
-        st.caption("買入時 YTM 是客戶當年「鎖定」的收益率，適合拿來跟客戶溝通；"
-                   "但判斷換券划不划算，要比的是「目前市價」的 YTM（上方第一排），"
-                   "因為過去的價差已經發生，換或不換都改變不了。")
+        if sb["cost_cover"] < 99.5 and sb["cost_ytm"] is not None:
+            st.caption(f"目前只有 {sb['cost_cover']:.0f}% 的部位有填完整買入資料，上面的數字僅涵蓋這部分。")
+        st.caption("為什麼不能直接拿「當年 YTM」和「新券 YTM」比？因為當年 YTM 是以當初的本金計算，"
+                   "新券 YTM 是以賣出後剩下的市值計算，兩者的本金基礎不同。"
+                   "換成同一個本金基礎（中間那格）後，換券的收益差距與上方第一排一致；"
+                   "換券真正換到的是「利率風險大幅下降」，而不是收益率提高。")
 
     # ---- 情境表 ----
     st.subheader("④ 利率情境比較")
