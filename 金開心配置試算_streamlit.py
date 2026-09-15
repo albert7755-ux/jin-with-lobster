@@ -11,6 +11,7 @@
   3. 自動算：資金配置比例、各標的年化配息、整包年化配息率
   4. 每年配息時程表（12 個月，依配息頻率與到期月推算）
   5. 現金流長條圖 + 明細表，可下載 Excel
+  6. 換券前後比較（左側「功能選擇」切換）：存續期間與利率 ±1% 價格變化
 
 執行：streamlit run 金開心配置試算_streamlit.py
 環境變數（或在側邊欄輸入）：
@@ -207,6 +208,240 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.caption("基金／SI 等非報價檔商品，可在下方「自行新增標的」手動輸入配息率。")
+
+# ---------- 功能切換：配置試算 / 換券前後比較 ----------
+st.sidebar.markdown("---")
+app_mode = st.sidebar.radio("功能選擇", ["💰 配置試算", "🔄 換券前後比較"], key="app_mode")
+
+FREQ_OPTIONS = ["半年配", "季配", "月配", "年配"]
+SWAP_BPS = (-100, -50, 50, 100)
+
+
+def _swap_side(side_key, title, hint):
+    """
+    換券比較的一側（調整前 / 調整後）。
+    回傳 list of dict：標的、票面、YTM、剩餘年期、配息頻率、金額
+    """
+    st.subheader(title)
+    st.caption(hint)
+    # (1) 從架上報價挑選
+    _opts = {}
+    for b in bonds:
+        if not isinstance(b.get("years"), (int, float)) or not isinstance(b.get("ytm"), (int, float)):
+            continue
+        _lbl = (f'{b["name"]}（{b.get("code","")}）｜{b.get("ccy","")} '
+                f'票面 {b.get("coupon","-")}%｜YTM {b["ytm"]:.2f}%｜{b["years"]:.1f}年')
+        _opts[_lbl] = b
+    _picks = st.multiselect("從架上報價挑選（可搜尋名稱或代碼）", list(_opts.keys()),
+                            key=f"swap_pick_{side_key}",
+                            placeholder="👆 點這裡搜尋，例如「蘋果」或債券代碼")
+    out = []
+    if _picks:
+        _df = pd.DataFrame([{
+            "標的": _opts[l]["name"],
+            "票面%": float(_opts[l]["coupon"]) if isinstance(_opts[l].get("coupon"), (int, float))
+                     else float(_opts[l].get("cy") or 0),
+            "YTM%": float(_opts[l]["ytm"]),
+            "剩餘年期": float(_opts[l]["years"]),
+            "配息頻率": _opts[l].get("freq") if _opts[l].get("freq") in FREQ_OPTIONS else "半年配",
+            "金額": 0.0,
+        } for l in _picks])
+        # 版本化 key：挑選清單改變時表格重建
+        _ver = abs(hash(tuple(_picks))) % 10**8
+        _ed = st.data_editor(
+            _df, key=f"swap_ed_{side_key}_{_ver}", hide_index=True, use_container_width=True,
+            disabled=["標的"],
+            column_config={
+                "票面%": st.column_config.NumberColumn(format="%.3f"),
+                "YTM%": st.column_config.NumberColumn(format="%.2f", help="可改成目前市價對應的殖利率"),
+                "剩餘年期": st.column_config.NumberColumn(format="%.1f"),
+                "配息頻率": st.column_config.SelectboxColumn(options=FREQ_OPTIONS),
+                "金額": st.column_config.NumberColumn("金額（市值）", format="%.0f", min_value=0.0,
+                                                      help="請填這檔債券目前的市值"),
+            })
+        out += _ed.to_dict("records")
+
+    # (2) 手動輸入不在架上的債券（庫存舊券常見）
+    with st.expander("✏️ 手動輸入不在架上的債券（點開後，在表格最下方空白列直接輸入）"):
+        _blank = pd.DataFrame({"標的": pd.Series(dtype="str"),
+                               "票面%": pd.Series(dtype="float"),
+                               "YTM%": pd.Series(dtype="float"),
+                               "剩餘年期": pd.Series(dtype="float"),
+                               "配息頻率": pd.Series(dtype="str"),
+                               "金額": pd.Series(dtype="float")})
+        _man = st.data_editor(
+            _blank, key=f"swap_man_{side_key}", num_rows="dynamic", hide_index=True,
+            use_container_width=True,
+            column_config={
+                "票面%": st.column_config.NumberColumn(format="%.3f", min_value=0.0),
+                "YTM%": st.column_config.NumberColumn(format="%.2f"),
+                "剩餘年期": st.column_config.NumberColumn(format="%.1f", min_value=0.0),
+                "配息頻率": st.column_config.SelectboxColumn(options=FREQ_OPTIONS, default="半年配"),
+                "金額": st.column_config.NumberColumn("金額（市值）", format="%.0f", min_value=0.0),
+            })
+        out += _man.to_dict("records")
+
+    # 清理：只保留資料完整、金額 > 0 的列
+    clean = []
+    for r in out:
+        try:
+            amt = float(r.get("金額") or 0)
+            ytm = float(r.get("YTM%"))
+            yrs = float(r.get("剩餘年期"))
+            cpn = float(r.get("票面%") if r.get("票面%") is not None else 0)
+        except (TypeError, ValueError):
+            continue
+        if amt <= 0 or yrs <= 0 or pd.isna(ytm) or pd.isna(yrs) or pd.isna(cpn):
+            continue
+        clean.append({"標的": str(r.get("標的") or "（未命名）"), "票面%": cpn, "YTM%": ytm,
+                      "剩餘年期": yrs, "配息頻率": r.get("配息頻率") or "半年配", "金額": amt})
+    return clean
+
+
+def _swap_stats(rows_, md_fn):
+    """計算一側的加權修正存續期間、凸性、加權YTM與明細"""
+    tot = sum(r["金額"] for r in rows_)
+    wd = wc = wy = 0.0
+    det = []
+    for r in rows_:
+        md, cx = md_fn(r["票面%"], r["YTM%"], r["剩餘年期"], r["配息頻率"])
+        if md is None:
+            continue
+        w = r["金額"] / tot
+        wd += w * md
+        wc += w * (cx or 0.0)
+        wy += w * r["YTM%"]
+        det.append(dict(r, 修正存續期間=md, 凸性=cx, 占比=w * 100))
+    return {"tot": tot, "md": wd, "cx": wc, "ytm": wy, "det": det}
+
+
+if app_mode == "🔄 換券前後比較":
+    st.markdown("""<div class="hero">
+<h1>換券前後・利率敏感度比較</h1>
+<p>把「調整前庫存」和「調整後新標的」放在一起，看存續期間降多少、利率上升 1% 時少虧多少</p></div>""",
+                unsafe_allow_html=True)
+    try:
+        from jkx_pdf import modified_duration, price_change_pct
+    except Exception as e:
+        st.error(f"找不到 jkx_pdf.py 的存續期間函式：{str(e)[:120]}。請確認 jkx_pdf.py 與本檔放在同一個資料夾。")
+        st.stop()
+
+    if not bonds:
+        st.info("尚未載入架上報價（左側輸入存取密碼即可）。沒有密碼也可以用「手動輸入」試算。")
+
+    before = _swap_side("before", "① 調整前（現有庫存，例如 25 年以上長債）",
+                        "金額請填目前市值；YTM 請盡量用目前賣出價（買回價）對應的殖利率，"
+                        "架上報價多為申購端，實際賣出殖利率通常略高。")
+    after = _swap_side("after", "② 調整後（換入標的，例如 10–15 年債）",
+                       "金額請填預計買進的金額。")
+
+    if not before or not after:
+        st.info("請在「調整前」與「調整後」各至少輸入一檔、金額大於 0 的債券。")
+        st.stop()
+
+    sb = _swap_stats(before, modified_duration)
+    sa = _swap_stats(after, modified_duration)
+    if not sb["det"] or not sa["det"]:
+        st.warning("有債券資料不足，無法計算存續期間，請檢查票面、YTM、剩餘年期。")
+        st.stop()
+
+    if abs(sb["tot"] - sa["tot"]) > max(1.0, sb["tot"] * 0.01):
+        st.warning(f"調整前市值 {sb['tot']:,.0f} 與調整後金額 {sa['tot']:,.0f} 不同，"
+                   "下面的金額比較各自以自己的部位計算；百分比比較不受影響。")
+
+    # ---- 核心指標 ----
+    st.subheader("③ 比較結果")
+    up_b = price_change_pct(sb["md"], sb["cx"], 100)
+    up_a = price_change_pct(sa["md"], sa["cx"], 100)
+    loss_b = sb["tot"] * up_b / 100
+    loss_a = sa["tot"] * up_a / 100
+    k1, k2, k3 = st.columns(3)
+    k1.metric("修正存續期間", f"{sb['md']:.2f} → {sa['md']:.2f}",
+              delta=f"{sa['md'] - sb['md']:+.2f}（{(sa['md'] / sb['md'] - 1) * 100:+.0f}%）",
+              delta_color="inverse")
+    k2.metric("利率 +1% 估計價格變動", f"{up_b:+.2f}% → {up_a:+.2f}%",
+              delta=f"{up_a - up_b:+.2f} 個百分點", delta_color="normal")
+    k3.metric("加權 YTM", f"{sb['ytm']:.2f}% → {sa['ytm']:.2f}%",
+              delta=f"{(sa['ytm'] - sb['ytm']) * 100:+.0f} bp", delta_color="normal")
+
+    k4, k5, k6 = st.columns(3)
+    k4.metric("調整前：利率 +1% 估計損益", f"{loss_b:+,.0f}")
+    k5.metric("調整後：利率 +1% 估計損益", f"{loss_a:+,.0f}")
+    k6.metric("少虧金額", f"{loss_a - loss_b:+,.0f}")
+
+    # ---- 情境表 ----
+    st.subheader("④ 利率情境比較")
+    sc = pd.DataFrame([{
+        "利率變動": f"{bp:+d} bp",
+        "調整前 價格變動%": price_change_pct(sb["md"], sb["cx"], bp),
+        "調整後 價格變動%": price_change_pct(sa["md"], sa["cx"], bp),
+        "調整前 損益": sb["tot"] * price_change_pct(sb["md"], sb["cx"], bp) / 100,
+        "調整後 損益": sa["tot"] * price_change_pct(sa["md"], sa["cx"], bp) / 100,
+    } for bp in SWAP_BPS])
+    sc["差異（調整後−調整前）"] = sc["調整後 損益"] - sc["調整前 損益"]
+    st.dataframe(sc.style.format({
+        "調整前 價格變動%": "{:+.2f}", "調整後 價格變動%": "{:+.2f}",
+        "調整前 損益": "{:+,.0f}", "調整後 損益": "{:+,.0f}",
+        "差異（調整後−調整前）": "{:+,.0f}"}), use_container_width=True, hide_index=True)
+
+    _long = pd.concat([
+        pd.DataFrame({"情境": sc["利率變動"], "組合": "調整前", "價格變動%": sc["調整前 價格變動%"]}),
+        pd.DataFrame({"情境": sc["利率變動"], "組合": "調整後", "價格變動%": sc["調整後 價格變動%"]}),
+    ])
+    _order = [f"{bp:+d} bp" for bp in SWAP_BPS]
+    try:
+        import altair as alt
+        _ch = alt.Chart(_long).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+            x=alt.X("情境:N", sort=_order, title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("組合:N", sort=["調整前", "調整後"]),
+            y=alt.Y("價格變動%:Q", title="估計價格變動 %"),
+            color=alt.Color("組合:N", sort=["調整前", "調整後"],
+                            scale=alt.Scale(range=["#B23A2E", "#1F8AC0"]),
+                            legend=alt.Legend(orient="top", title=None)),
+            tooltip=["情境", "組合", alt.Tooltip("價格變動%:Q", format="+.2f")],
+        ).properties(height=300)
+        st.altair_chart(_ch, use_container_width=True)
+    except Exception:
+        st.bar_chart(_long.pivot(index="情境", columns="組合", values="價格變動%").reindex(_order))
+
+    # ---- 白話結論 ----
+    _give_up = sa["tot"] * (sa["ytm"] - sb["ytm"]) / 100   # 每年收益差（負數＝少收）
+    _saved = loss_a - loss_b                                # 利率+1% 少虧的金額
+    _txt = (f"調整後，債券部位的修正存續期間由 **{sb['md']:.2f}** 降到 **{sa['md']:.2f}**"
+            f"（利率敏感度約降低 **{(1 - sa['md'] / sb['md']) * 100:.0f}%**）。"
+            f"若利率上升 1%，估計價格變動由 **{up_b:+.2f}%** 變成 **{up_a:+.2f}%**，"
+            f"約少虧 **{_saved:,.0f}**。")
+    if _give_up < 0 and _saved > 0:
+        # 以百分比計算，避免調整前後金額不同造成失真
+        _be_yrs = (up_a - up_b) / (sb["ytm"] - sa["ytm"])
+        _txt += (f"　代價是加權 YTM 由 {sb['ytm']:.2f}% 變為 {sa['ytm']:.2f}%，每年約少收 "
+                 f"**{-_give_up:,.0f}**；換句話說，利率上升 1% 時少虧的幅度（每 100 元），約等於 "
+                 f"**{_be_yrs:.1f} 年**的殖利率差。")
+    elif _give_up >= 0:
+        _txt += f"　同時加權 YTM 由 {sb['ytm']:.2f}% 變為 {sa['ytm']:.2f}%，收益沒有減少。"
+    st.info(_txt)
+    st.caption("反方情境也要一起看：若利率下降，長債漲幅較大，換券後會少賺（見上表 −100bp、−50bp 列）。")
+
+    # ---- 明細 ----
+    st.subheader("⑤ 各檔明細")
+    det = pd.DataFrame(
+        [dict(r, 組合="調整前") for r in sb["det"]] + [dict(r, 組合="調整後") for r in sa["det"]])
+    det = det[["組合", "標的", "票面%", "YTM%", "剩餘年期", "配息頻率", "金額", "占比",
+               "修正存續期間", "凸性"]].rename(columns={"占比": "組內占比%"})
+    det["利率+1% 價格變動%"] = [price_change_pct(a, b, 100)
+                             for a, b in zip(det["修正存續期間"], det["凸性"])]
+    st.dataframe(det.style.format({
+        "票面%": "{:.3f}", "YTM%": "{:.2f}", "剩餘年期": "{:.1f}", "金額": "{:,.0f}",
+        "組內占比%": "{:.1f}", "修正存續期間": "{:.2f}", "凸性": "{:.1f}",
+        "利率+1% 價格變動%": "{:+.2f}"}), use_container_width=True, hide_index=True)
+
+    st.caption("本表為簡化估算：以現金流折現計算修正存續期間與凸性，假設殖利率曲線平行移動；"
+               "未計入提前買回條款、信用利差變動、買賣價差、交易成本、流動性與匯率影響；"
+               "不同幣別未換算。換券會使帳上未實現損益轉為已實現。實際價格以總行報價為準。")
+    st.markdown("""<div style="background:#FDECEC;border:1.5px solid #B23A2E;border-radius:9px;
+padding:12px 16px;text-align:center;color:#B23A2E;font-weight:700;font-size:15px;margin-top:10px">
+**本文件僅供內部試算使用　請勿外流**</div>""", unsafe_allow_html=True)
+    st.stop()
 
 # ---------- 主畫面 ----------
 st.markdown(f"""<div class="hero">
